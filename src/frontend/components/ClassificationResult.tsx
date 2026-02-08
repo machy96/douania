@@ -1,9 +1,9 @@
 'use client';
 
-import { ClassificationResult } from '../types';
+import type { ClassificationResult as ClassificationResultType } from '../types';
 
 interface ClassificationResultProps {
-  result: ClassificationResult;
+  result: ClassificationResultType;
 }
 
 export function ClassificationResult({ result }: ClassificationResultProps) {
