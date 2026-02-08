@@ -1,0 +1,199 @@
+{
+  "name": "HSBoss Agent - RAG avec Pinecone",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hsboss-rag",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Préparer le contexte et la session\nconst input = $input.first().json;\nconst sessionId = input.sessionId || input.userId || 'anon_' + Date.now();\n\nreturn [{\n  json: {\n    sessionId: sessionId,\n    query: input.description || input.query || '',\n    userId: input.userId || 'anonymous',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "name": "Prepare Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "name": "Generate Embedding",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "vectorSearch",
+        "indexId": "douania-ne",
+        "options": {
+          "namespace": "notes-explicatives",
+          "topK": 5
+        }
+      },
+      "name": "Pinecone Search",
+      "type": "@pinecone-database/pinecone.pinecone",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Formater le contexte RAG\nconst input = $input.first().json;\nconst matches = input.matches || [];\n\n// Filtrer par score de pertinence (> 0.7)\nconst relevantMatches = matches.filter(m => m.score > 0.7);\n\n// Construire le contexte textuel\nconst contextText = relevantMatches.map((match, idx) => {\n  const meta = match.metadata || {};\n  return `[Source ${idx + 1} - Chapitre ${meta.chapitre || 'N/A'}, Code ${meta.code_hs || 'N/A'}, Score: ${(match.score * 100).toFixed(1)}%]:\n${meta.text || ''}`;\n}).join('\\n\\n---\\n\\n');\n\n// Extraire codes candidats\nconst candidateCodes = [...new Set(\n  relevantMatches.map(m => m.metadata?.code_hs).filter(Boolean)\n)];\n\nreturn [{\n  json: {\n    ...input,\n    rag_context: relevantMatches,\n    context_text: contextText || 'Aucun contexte pertinent trouvé.',\n    candidate_codes: candidateCodes,\n    has_context: relevantMatches.length > 0\n  }\n}];"
+      },
+      "name": "Format RAG Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "temperature": 0.2,
+          "maxTokens": 2000
+        },
+        "messages": {
+          "message": [
+            {
+              "role": "system",
+              "content": "Tu es HSBoss, un expert en classification douanière HS Code pour le Maroc (ADII).\n\n## 📚 CONTEXTE RAG - Notes Explicatives Suisses :\n{{ $json.context_text }}\n\n## 🎯 RÈGLES HSBoss :\n\n1. **UTILISE UNIQUEMENT le contexte RAG ci-dessus**\n   - Ne invente jamais d'informations\n   - Si le contexte est insuffisant, indique-le clairement\n\n2. **CITATION OBLIGATOIRE**\n   - Cite EXACTEMENT les passages des Notes Explicatives\n   - Jamais de paraphrase\n\n3. **FORMAT CODE** : XXXX.XX.XX.XX (10 chiffres)\n\n4. **VALIDATION**\n   - Vérifie que le code est dans les candidats trouvés\n   - Confirme le chapitre approprié\n\n5. **SCORE DE CONFIANCE**\n   - Basé sur la pertinence des sources RAG\n   - Mentionne si plusieurs codes sont possibles\n\n## FORMAT JSON DE RÉPONSE :\n\n```json\n{\n  \"code_hs\": \"XXXX.XX.XX.XX\",\n  \"designation\": \"Description exacte\",\n  \"taux_douane\": 0.0,\n  \"unite\": \"kg|nombre|litre\",\n  \"confiance\": 95,\n  \"citation_ne\": \"Citation EXACTE du contexte RAG\",\n  \"chapitre\": \"XX\",\n  \"codes_candidats\": [\"0101.21\", \"0101.29\"],\n  \"analyse\": \"Explication basée sur les sources\",\n  \"sources_utilisees\": [\"Source 1 - Chapitre 01\", \"Source 2 - Chapitre 01\"],\n  \"alerte_contexte\": \"Si contexte insuffisant, explique ici\",\n  \"recommandations\": \"Conseils pour la déclaration\",\n  \"verification_humaine\": false\n}\n```"
+            },
+            {
+              "role": "user",
+              "content": "=Produit à classifier : {{ $json.query }}\n\nCodes candidats trouvés dans le RAG : {{ JSON.stringify($json.candidate_codes) }}\n\nSession : {{ $json.sessionId }}\n\nAnalyse ce produit en utilisant UNIQUEMENT le contexte RAG fourni."
+            }
+          ]
+        }
+      },
+      "name": "HSBoss RAG Agent",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parser et valider la réponse\nconst input = $input.first().json;\nconst agentResponse = input.choices?.[0]?.message?.content || input.message?.content;\n\ntry {\n  // Extraire JSON\n  const jsonMatch = agentResponse.match(/```json\n?([\s\S]*?)\n?```/) || \n                    agentResponse.match(/{[\s\S]*}/);\n  \n  const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : agentResponse;\n  const result = JSON.parse(jsonStr);\n  \n  // Validation\n  const isValid = \n    result.code_hs && /^\d{4}\.\d{2}\.\d{2}\.\d{2}$/.test(result.code_hs) &&\n    result.citation_ne &&\n    result.confiance >= 0;\n  \n  return [{\n    json: {\n      success: true,\n      valid: isValid,\n      result: result,\n      has_rag_context: input.has_context,\n      sessionId: input.sessionId\n    }\n  }];\n  \n} catch (e) {\n  return [{\n    json: {\n      success: false,\n      error: 'Parsing error',\n      raw_response: agentResponse\n    }\n  }];\n}"
+      },
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.success ? {\n  success: true,\n  code_hs: $json.result.code_hs,\n  designation: $json.result.designation,\n  taux_douane: $json.result.taux_douane + '%',\n  taux_tva: '20%',\n  unite: $json.result.unite,\n  confiance: $json.result.confiance,\n  neCitation: $json.result.citation_ne,\n  chapitre: $json.result.chapitre,\n  codes_candidats: $json.result.codes_candidats,\n  analyse: $json.result.analyse,\n  sources_utilisees: $json.result.sources_utilisees,\n  alerte_contexte: $json.result.alerte_contexte,\n  recommandations: $json.result.recommandations,\n  verification_humaine_requise: $json.result.verification_humaine,\n  rag_active: $json.has_rag_context,\n  sessionId: $json.sessionId\n} : {\n  success: false,\n  error: $json.error,\n  raw_response: $json.raw_response\n} }}"
+      },
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1650, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Context": {
+      "main": [
+        [
+          {
+            "node": "Generate Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Embedding": {
+      "main": [
+        [
+          {
+            "node": "Pinecone Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinecone Search": {
+      "main": [
+        [
+          {
+            "node": "Format RAG Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format RAG Context": {
+      "main": [
+        [
+          {
+            "node": "HSBoss RAG Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HSBoss RAG Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "HSBoss",
+      "color": "#FF6D00"
+    },
+    {
+      "name": "RAG",
+      "color": "#00C853"
+    },
+    {
+      "name": "Pinecone",
+      "color": "#673AB7"
+    }
+  ]
+}
