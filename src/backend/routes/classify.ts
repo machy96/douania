@@ -1,7 +1,40 @@
 import { FastifyInstance } from 'fastify';
 import { ClassificationRequest, ClassificationResponse, ClassificationResult } from '../../shared/types';
 
-// Données mock de classification HS Code
+// Configuration n8n
+const N8N_BASE_URL = 'http://147.93.52.143:32771';
+const N8N_WORKFLOW_ID = 'Ys3P36vD7PTxWB1p';
+
+// Fonction pour appeler le workflow n8n
+async function callN8nWorkflow(query: string): Promise<ClassificationResult | null> {
+  try {
+    const response = await fetch(`${N8N_BASE_URL}/webhook/classify`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query }),
+    });
+
+    if (!response.ok) {
+      console.error('n8n webhook error:', response.status, response.statusText);
+      return null;
+    }
+
+    const data = await response.json();
+    return {
+      hsCode: data.hsCode || data.code_hs || '9999.99.99',
+      designation: data.designation || data.description || 'Non classifié',
+      tauxDD: data.tauxDD || data.taux_dd || 'N/A',
+      confidence: data.confidence || data.confiance || 80,
+    };
+  } catch (error) {
+    console.error('Error calling n8n:', error);
+    return null;
+  }
+}
+
+// Données mock de classification HS Code (fallback)
 const mockClassifications: Record<string, ClassificationResult> = {
   'iphone': {
     hsCode: '8517.12.00',
@@ -98,7 +131,7 @@ export async function classificationRoutes(fastify: FastifyInstance) {
   // Route POST /api/classify
   fastify.post<{ Body: ClassificationRequest }>('/classify', async (request, reply): Promise<ClassificationResponse> => {
     const { query } = request.body;
-    
+
     if (!query || query.trim().length === 0) {
       reply.code(400);
       return {
@@ -106,19 +139,30 @@ export async function classificationRoutes(fastify: FastifyInstance) {
         error: 'La requête ne peut pas être vide'
       };
     }
-    
-    // Simulation d'un délai de traitement (comme une vraie IA)
-    await new Promise(resolve => setTimeout(resolve, 800));
-    
+
+    // Essayer d'abord n8n
+    const n8nResult = await callN8nWorkflow(query);
+
+    if (n8nResult) {
+      return {
+        success: true,
+        result: n8nResult
+      };
+    }
+
+    // Fallback sur les mocks si n8n ne répond pas
+    console.log('n8n unavailable, using mock data');
+    await new Promise(resolve => setTimeout(resolve, 500));
+
     const result = findClassification(query);
-    
+
     if (!result) {
       return {
         success: false,
         error: 'Impossible de classifier ce produit. Veuillez fournir plus de détails.'
       };
     }
-    
+
     return {
       success: true,
       result
