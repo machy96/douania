@@ -120,8 +120,13 @@ export function ChatInterface() {
     setInput(transcription);
     // Auto-envoi après transcription
     if (transcription) {
+      // Créer un événement de soumission programmatique
+      const fakeEvent = {
+        preventDefault: () => {},
+      } as FormEvent;
+      
       setTimeout(() => {
-        handleSubmit(new Event('submit') as FormEvent);
+        handleSubmit(fakeEvent);
       }, 500);
     }
   };
