@@ -26,4 +26,5 @@ export interface ChatMessage {
   content: string;
   timestamp: Date;
   classification?: ClassificationResult;
+  imageUrl?: string; // F-008: URL de l'image uploadée
 }
