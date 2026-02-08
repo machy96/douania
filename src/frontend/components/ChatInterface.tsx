@@ -25,10 +25,10 @@ export function ChatInterface() {
     setIsLoading(true);
 
     try {
-      const response = await fetch('http://localhost:3001/api/classify', {
+      const response = await fetch('/api/classify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: userMessage.content }),
+        body: JSON.stringify({ description: userMessage.content }),
       });
 
       const data = await response.json();
@@ -36,11 +36,19 @@ export function ChatInterface() {
       const botMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         type: 'bot',
-        content: data.success 
+        content: data.hsCode 
           ? `Classification trouvée pour "${userMessage.content}"`
           : data.error || 'Une erreur est survenue',
         timestamp: new Date(),
-        classification: data.result,
+        classification: data.hsCode ? {
+          hsCode: data.hsCode,
+          designation: data.designation,
+          tauxDD: data.tauxDD,
+          tauxTVA: data.tauxTVA,
+          aiSummary: data.aiSummary,
+          confidence: data.confidence,
+          neCitation: data.neCitation
+        } : undefined,
       };
 
       setMessages((prev) => [...prev, botMessage]);
