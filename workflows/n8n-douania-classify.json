@@ -1,0 +1,173 @@
+{
+  "name": "Douania - Classification HS Code",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "douania-classify",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Vérifier les données reçues\nconst input = $input.first().json;\n\nif (!input.description && !input.imageBase64) {\n  return [{\n    json: {\n      error: 'Description ou image requise',\n      status: 400\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    description: input.description || '',\n    imageBase64: input.imageBase64 || null,\n    userId: input.userId || 'anonymous',\n    sessionId: input.sessionId || Date.now().toString(),\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "validate-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Recherche dans les données locales (fallback si pas de Pinecone)\nconst input = $input.first().json;\nconst query = input.description.toLowerCase();\n\n// Base de données temporaire des codes HS Chapitre 01\nconst hsDatabase = [\n  { code: '0101.21.00.00', designation: 'Chevaux reproducteurs de race pure', taux: 2.5, unite: 'nombre', keywords: ['cheval', 'etalon', 'jument', 'poulain'] },\n  { code: '0101.29.10.00', designation: 'Chevaux destinés à la boucherie', taux: 10, unite: 'nombre', keywords: ['cheval', 'boucherie', 'viande'] },\n  { code: '0102.21.00.00', designation: 'Bovins reproducteurs de race pure', taux: 2.5, unite: 'nombre', keywords: ['bovin', 'vache', 'taureau', 'veau'] },\n  { code: '0102.29.10.00', designation: 'Veaux', taux: 200, unite: 'nombre', keywords: ['veau', 'bovin', 'jeune'] },\n  { code: '0105.13.10.00', designation: 'Canards reproducteurs', taux: 2.5, unite: 'nombre', keywords: ['canard', 'volaille', 'oiseau'] },\n  { code: '0106.11.00.00', designation: 'Primates', taux: 200, unite: 'nombre', keywords: ['singe', 'primate', 'lémurien'] },\n  { code: '0106.20.91.00', designation: 'Tortues', taux: 2.5, unite: 'nombre', keywords: ['tortue', 'reptile'] }\n];\n\n// Recherche par mots-clés\nconst matches = hsDatabase.filter(item => {\n  return item.keywords.some(kw => query.includes(kw)) ||\n         item.designation.toLowerCase().includes(query) ||\n         item.code.includes(query);\n});\n\n// Trier par pertinence (nombre de mots-clés correspondants)\nmatches.sort((a, b) => {\n  const aMatches = a.keywords.filter(kw => query.includes(kw)).length;\n  const bMatches = b.keywords.filter(kw => query.includes(kw)).length;\n  return bMatches - aMatches;\n});\n\nreturn [{\n  json: {\n    ...input,\n    candidates: matches.slice(0, 3),\n    hasCandidates: matches.length > 0\n  }\n}];"
+      },
+      "id": "search-candidates",
+      "name": "Search Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {},
+        "messages": {
+          "message": [
+            {
+              "role": "system",
+              "content": "Tu es un expert en classification douanière HS Code pour le Maroc (ADII).\n\nRÈGLES STRICTES:\n1. Analyse la description du produit fournie\n2. Choisis le code HS le plus approprié parmi les candidats\n3. Retourne UNIQUEMENT un objet JSON valide\n4. Le code doit être au format: XXXX.XX.XX.XX (10 chiffres)\n5. Inclus une citation courte de la Note Explicative\n\nFORMAT DE RÉPONSE (JSON uniquement):\n{\n  \"code_hs\": \"0101.21.00.00\",\n  \"designation\": \"Chevaux reproducteurs de race pure\",\n  \"taux_douane\": 2.5,\n  \"unite\": \"nombre\",\n  \"confiance\": 95,\n  \"citation_ne\": \"Les chevaux reproducteurs de race pure sont...\",\n  \"explication\": \"Ce code correspond à...\"\n}"
+            },
+            {
+              "role": "user",
+              "content": "=Description du produit: {{ $json.description }}\n\nCandidats disponibles:\n{{ JSON.stringify($json.candidates, null, 2) }}\n\nQuel est le meilleur code HS pour ce produit ?"
+            }
+          ]
+        }
+      },
+      "id": "openai-classify",
+      "name": "OpenAI Classify",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [850, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parser la réponse OpenAI\nconst input = $input.first().json;\nconst openaiResponse = input.choices?.[0]?.message?.content || input.message?.content || input.content;\n\ntry {\n  // Essayer de parser le JSON\n  const result = JSON.parse(openaiResponse);\n  \n  return [{\n    json: {\n      success: true,\n      code_hs: result.code_hs,\n      designation: result.designation,\n      taux_douane: result.taux_douane + '%',\n      taux_tva: '20%',\n      unite: result.unite,\n      confiance: result.confiance,\n      neCitation: result.citation_ne,\n      explication: result.explication,\n      userId: input.userId,\n      timestamp: input.timestamp\n    }\n  }];\n} catch (e) {\n  // Fallback si le parsing échoue\n  return [{\n    json: {\n      success: false,\n      error: 'Impossible de parser la réponse IA',\n      rawResponse: openaiResponse\n    }\n  }];\n}"
+      },
+      "id": "parse-result",
+      "name": "Parse Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error || 'Classification failed', status: 400 } }}"
+      },
+      "id": "error-response",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1250, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Search Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Candidates": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Classify": {
+      "main": [
+        [
+          {
+            "node": "Parse Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Result": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "id": "1",
+      "name": "production",
+      "color": "#FF0000"
+    },
+    {
+      "id": "2",
+      "name": "douania",
+      "color": "#0000FF"
+    }
+  ]
+}
