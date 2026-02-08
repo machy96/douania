@@ -1,0 +1,130 @@
+{
+  "name": "HSBoss Agent - Classification Intelligente",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hsboss-classify",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Récupérer la session utilisateur pour mémoire\nconst input = $input.first().json;\nconst sessionId = input.sessionId || input.userId || 'anon_' + Date.now();\n\n// Structure de données pour l'agent\nreturn [{\n  json: {\n    sessionId: sessionId,\n    query: input.description || input.query || '',\n    imageBase64: input.imageBase64 || null,\n    userId: input.userId || 'anonymous',\n    timestamp: new Date().toISOString(),\n    conversation_history: input.history || []\n  }\n}];"
+      },
+      "name": "Prepare Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 2000
+        },
+        "messages": {
+          "message": [
+            {
+              "role": "system",
+              "content": "Tu es HSBoss, un expert en classification douanière HS Code pour le Maroc (ADII).\n\n## RÈGLES D'OR HSBoss :\n\n1. **CITATION OBLIGATOIRE** : Tu dois TOUJOURS citer tes sources des Notes Explicatives Suisses. Jamais de paraphrase.\n\n2. **FORMAT CODE** : XXXX.XX.XX.XX (10 chiffres exactement)\n\n3. **VÉRIFICATION** :\n   - Chapitre approprié ?\n   - Position correcte ?\n   - Sous-position valide ?\n   - Taux de douane confirmé ?\n\n4. **ARBRE DÉCISIONNEL** :\n   - Matière première ou produit fini ?\n   - Fonction principale ?\n   - Matériau de base ?\n   - Destination (consommation, reproduction, industrie) ?\n\n5. **CONFIDENCE SCORE** :\n   - 90-100% : Classification certaine\n   - 70-89% : Classification probable, vérification recommandée\n   - 50-69% : Incertitude, expert humain nécessaire\n   - <50% : Refuse la classification\n\n6. **RÈGLES SPÉCIFIQUES MAROC** :\n   - Reproducteurs de race pure : taux réduits\n   - Contingents tarifaires : mentionner les limitations\n   - Origine préférentielle : vérifier accords commerciaux\n   - RGI (Règlementation Générale Importations) : vérifier restrictions\n\n## FORMAT DE RÉPONSE :\n\n```json\n{\n  \"code_hs\": \"XXXX.XX.XX.XX\",\n  \"designation\": \"Description exacte\",\n  \"taux_douane\": 0.0,\n  \"unite\": \"kg|nombre|litre\",\n  \"confiance\": 95,\n  \"citation_ne\": \"Citation EXACTE de la Note Explicative Suisse\",\n  \"chapitre\": \"XX\",\n  \"section\": \"Description section\",\n  \"analyse\": \"Raisonnement détaillé\",\n  \"alertes\": [\"Contingent tarifaire\", \"RGI applicable\"],\n  \"recommandations\": \"Conseils pour la déclaration\",\n  \"sources_verifiees\": true\n}\n```\n\nN'utilise que les informations des Notes Explicatives Suisses téléchargées. Si tu n'es pas sûr, indique-le clairement."
+            },
+            {
+              "role": "user",
+              "content": "=Session: {{ $json.sessionId }}\n\nDescription produit à classifier :\n{{ $json.query }}\n\nHistorique conversation :\n{{ JSON.stringify($json.conversation_history, null, 2) }}\n\nAnalyse ce produit selon les règles HSBoss et retourne le JSON structuré."
+            }
+          ]
+        }
+      },
+      "name": "HSBoss Agent",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parser et valider la réponse de l'agent\nconst input = $input.first().json;\nconst agentResponse = input.choices?.[0]?.message?.content || input.message?.content;\n\ntry {\n  // Extraire le JSON de la réponse\n  const jsonMatch = agentResponse.match(/```json\n?([\s\S]*?)\n?```/) || \n                    agentResponse.match(/{[\s\S]*}/);\n  \n  const jsonStr = jsonMatch ? jsonMatch[1] || jsonMatch[0] : agentResponse;\n  const result = JSON.parse(jsonStr);\n  \n  // Validation HSBoss\n  const isValid = \n    result.code_hs && /^\d{4}\.\d{2}\.\d{2}\.\d{2}$/.test(result.code_hs) &&\n    result.designation &&\n    typeof result.taux_douane === 'number' &&\n    result.citation_ne &&\n    result.sources_verifiees === true;\n  \n  return [{\n    json: {\n      success: true,\n      valid: isValid,\n      result: result,\n      raw_response: agentResponse,\n      sessionId: input.sessionId\n    }\n  }];\n  \n} catch (e) {\n  return [{\n    json: {\n      success: false,\n      error: 'Impossible de parser la réponse de l\'agent',\n      raw_response: agentResponse,\n      parse_error: e.message\n    }\n  }];\n}"
+      },
+      "name": "Parse & Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.success ? {\n  success: true,\n  code_hs: $json.result.code_hs,\n  designation: $json.result.designation,\n  taux_douane: $json.result.taux_douane + '%',\n  taux_tva: '20%',\n  unite: $json.result.unite,\n  confiance: $json.result.confiance,\n  neCitation: $json.result.citation_ne,\n  chapitre: $json.result.chapitre,\n  section: $json.result.section,\n  analyse: $json.result.analyse,\n  alertes: $json.result.alertes,\n  recommandations: $json.result.recommandations,\n  sources_verifiees: $json.result.sources_verifiees,\n  sessionId: $json.sessionId\n} : {\n  success: false,\n  error: $json.error,\n  raw_response: $json.raw_response\n} }}"
+      },
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Context": {
+      "main": [
+        [
+          {
+            "node": "HSBoss Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HSBoss Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": ""
+  },
+  "tags": [
+    {
+      "name": "HSBoss",
+      "color": "#FF6D00"
+    },
+    {
+      "name": "production",
+      "color": "#00C853"
+    }
+  ]
+}
