@@ -1,8 +1,25 @@
 import { FastifyInstance } from 'fastify';
-import { ClassificationRequest, ClassificationResponse, ClassificationResult } from '../../shared/types';
+
+// Types inline pour éviter les problèmes d'import
+interface ClassificationRequest {
+  query: string;
+}
+
+interface ClassificationResult {
+  hsCode: string;
+  designation: string;
+  tauxDD: string;
+  confidence: number;
+}
+
+interface ClassificationResponse {
+  success: boolean;
+  result?: ClassificationResult;
+  error?: string;
+}
 
 // Configuration n8n
-const N8N_BASE_URL = 'http://147.93.52.143:32771';
+const N8N_BASE_URL = process.env.N8N_BASE_URL || 'http://147.93.52.143:32771';
 const N8N_WORKFLOW_ID = 'Ys3P36vD7PTxWB1p';
 
 // Fonction pour appeler le workflow n8n
@@ -21,7 +38,7 @@ async function callN8nWorkflow(query: string): Promise<ClassificationResult | nu
       return null;
     }
 
-    const data = await response.json();
+    const data: any = await response.json();
     return {
       hsCode: data.hsCode || data.code_hs || '9999.99.99',
       designation: data.designation || data.description || 'Non classifié',
