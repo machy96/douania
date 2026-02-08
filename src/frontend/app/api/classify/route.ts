@@ -1,35 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-// Mock classification data for Chapter 01
-const mockClassifications: Record<string, any> = {
-  'cheval': {
-    hsCode: '0101210000',
-    designation: 'Chevaux reproducteurs de race pure',
-    tauxDD: '2.5%',
-    tauxTVA: '20%',
-    aiSummary: 'Chevaux vivants, reproducteurs de race pure',
-    confidence: 95,
-    neCitation: 'Chapitre 01 - Note explicative: Les animaux vivants...'
-  },
-  'bovin': {
-    hsCode: '0102210000',
-    designation: 'Bovins reproducteurs de race pure',
-    tauxDD: '2.5%',
-    tauxTVA: '20%',
-    aiSummary: 'Animaux vivants de l\'espèce bovine',
-    confidence: 92,
-    neCitation: 'Chapitre 01 - Note explicative: Les bovins...'
-  },
-  'poulet': {
-    hsCode: '0105131000',
-    designation: 'Poulets reproducteurs de race pure',
-    tauxDD: '2.5%',
-    tauxTVA: '20%',
-    aiSummary: 'Volailles vivantes de l\'espèce Gallus domesticus',
-    confidence: 88,
-    neCitation: 'Chapitre 01 - Note explicative: Les volailles...'
-  }
-};
+import { hsCodesChapitre01 } from '../../../data/hsCodesCh01';
 
 export async function POST(request: NextRequest) {
   try {
@@ -43,19 +13,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Simple keyword matching for demo
-    const desc = description.toLowerCase();
-    let result = mockClassifications['bovin']; // default
+    // Recherche par mot-clé dans les 93 positions
+    const query = description.toLowerCase();
+    const matches = hsCodesChapitre01.filter(hs => 
+      hs.designation.toLowerCase().includes(query) ||
+      hs.code.includes(query)
+    );
 
-    if (desc.includes('cheval') || desc.includes('jument') || desc.includes('etalon')) {
-      result = mockClassifications['cheval'];
-    } else if (desc.includes('poulet') || desc.includes('poule') || desc.includes('volaille')) {
-      result = mockClassifications['poulet'];
-    } else if (desc.includes('boeuf') || desc.includes('vache') || desc.includes('taureau')) {
-      result = mockClassifications['bovin'];
+    if (matches.length === 0) {
+      return NextResponse.json({
+        error: 'Aucun code HS trouvé pour cette description',
+        suggestion: 'Essayez avec des termes comme: cheval, bovin, poulet, chien, oiseau...'
+      });
     }
 
-    return NextResponse.json(result);
+    // Prendre le meilleur match (premier résultat)
+    const bestMatch = matches[0];
+    
+    return NextResponse.json({
+      hsCode: bestMatch.code,
+      designation: bestMatch.designation,
+      tauxDD: `${bestMatch.taux}%`,
+      tauxTVA: '20%',
+      unite: bestMatch.unite,
+      aiSummary: `Classification trouvée: ${bestMatch.designation}`,
+      confidence: matches.length === 1 ? 95 : 85,
+      neCitation: 'Chapitre 01 - Animaux vivants',
+      matchesFound: matches.length,
+      allMatches: matches.slice(0, 5) // Retourner les 5 premiers résultats
+    });
   } catch (error) {
     console.error('Classification error:', error);
     return NextResponse.json(
