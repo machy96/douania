@@ -1,6 +1,6 @@
 'use client';
 
-import { ClassificationResult } from '@shared/types';
+import { ClassificationResult } from '../types';
 
 interface ClassificationResultProps {
   result: ClassificationResult;

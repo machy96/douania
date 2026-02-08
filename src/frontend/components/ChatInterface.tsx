@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, FormEvent } from 'react';
-import { ChatMessage, ClassificationResult } from '@shared/types';
+import { ChatMessage, ClassificationResult } from '../types';
 import { ClassificationResult as ResultComponent } from './ClassificationResult';
 
 export function ChatInterface() {
