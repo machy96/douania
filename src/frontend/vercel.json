@@ -1,0 +1,10 @@
+{
+  "buildCommand": "next build",
+  "devCommand": "next dev",
+  "installCommand": "npm install",
+  "framework": "nextjs",
+  "env": {
+    "N8N_WEBHOOK_URL": "http://147.93.52.143:32771/webhook/hsboss-classify",
+    "USE_N8N": "true"
+  }
+}

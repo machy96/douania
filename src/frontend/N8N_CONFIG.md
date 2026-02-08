@@ -60,8 +60,39 @@ Si n8n est indisponible :
 - Message d'erreur user-friendly
 - Suggestion de réessayer
 
+## Déploiement Vercel
+
+### Option 1 : Git Integration (Recommandé)
+1. Connecte ton repo GitHub à Vercel
+2. Les pushes déclenchent automatiquement le déploiement
+3. Configure les variables d'environnement dans Vercel Dashboard
+
+### Option 2 : CLI
+```bash
+npm i -g vercel
+vercel login
+vercel --prod
+```
+
+### Vérification post-déploiement
+Teste la classification :
+```bash
+curl -X POST https://TON-URL.vercel.app/api/classify \
+  -H "Content-Type: application/json" \
+  -d '{"description": "Chevaux reproducteurs"}'
+```
+
+## Troubleshooting
+
+| Erreur | Solution |
+|--------|----------|
+| `n8n_unavailable` | Vérifier que le workflow est actif dans n8n |
+| `Timeout` | Augmenter le timeout ou vérifier la latence serveur |
+| `Invalid JSON` | Vérifier le format de la réponse n8n |
+
 ## Sécurité
 
 - Pas de clé API exposée dans le frontend
 - Appels server-side uniquement (route API Next.js)
 - Validation des entrées
+- Timeout pour éviter les blocages
