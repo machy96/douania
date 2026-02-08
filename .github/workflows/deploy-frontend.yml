@@ -1,0 +1,30 @@
+name: Deploy Frontend to Vercel
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/frontend/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel
+
+      - name: Deploy to Vercel
+        working-directory: ./src/frontend
+        env:
+          VERCEL_TOKEN: dZ5orfK3pXfCGf7mzd9v0UMn
+        run: |
+          npx vercel --prod --token=dZ5orfK3pXfCGf7mzd9v0UMn --yes
