@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { hsCodesChapitre01 } from '../../../data/hsCodesCh01';
 
-// F-004: Citations NE Suisses par code
+// Configuration n8n
+const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'http://147.93.52.143:32771/webhook/hsboss-classify';
+const USE_N8N = process.env.USE_N8N === 'true' || true; // Par défaut, utiliser n8n
+
+// F-004: Citations NE Suisses par code (fallback si n8n down)
 const neCitations: Record<string, string> = {
   '0101210000': 'Chevaux reproducteurs de race pure - Note explicative: Les chevaux de race pure sont ceux reconnus par les autorités compétentes comme appartenant à des races établies.',
   '0101291000': 'Chevaux destinés à la boucherie - Conditions d\'importation soumises à contingent.',
@@ -13,95 +16,174 @@ const neCitations: Record<string, string> = {
   '0106111000': 'Primates - Singes, lémuriens et autres primates vivants.',
   '0106209100': 'Tortues - Reptiles de l\'ordre des Testudines, vivants.',
   '0106391200': 'Pigeons voyageurs - Oiseaux de la famille des Columbidés, élevés pour le vol ou la consommation.',
-  'default': 'Chapitre 01 - Animaux vivants. Voir Note Explicative Suisse pour plus de détails sur la classification.'
+  'default': 'Classification HSBoss - Voir Note Explicative Suisse pour plus de détails.'
 };
 
 function getNECitation(code: string): string {
-  return neCitations[code] || neCitations['default'];
+  const codeClean = code.replace(/\./g, '');
+  return neCitations[codeClean] || neCitations['default'];
 }
 
-// F-008: Classification par image (simulation pour l'instant)
-async function classifyImage(imageBase64: string) {
-  // Dans la version réelle, appeler GPT-4 Vision ici
-  // Pour l'instant, on retourne un résultat basé sur des mots-clés simulés
-  
-  // Simulation: analyse basique de l'image
-  // On pourrait détecter des patterns dans l'image base64
-  
-  // Résultat simulé
-  return {
-    hsCode: '0105131000',
-    designation: 'Poulets reproducteurs de race pure (classification par image)',
-    taux: 2.5,
-    unite: 'nombre',
-    confidence: 88,
-    note: 'Analyse par GPT-4 Vision (mode démo)'
-  };
+// Appel au webhook n8n HSBoss Agent
+async function callN8NAgent(description: string, userId?: string, sessionId?: string) {
+  const response = await fetch(N8N_WEBHOOK_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      description,
+      userId: userId || 'anonymous',
+      sessionId: sessionId || `sess_${Date.now()}`,
+      timestamp: new Date().toISOString()
+    }),
+    // Timeout de 30 secondes pour l'agent
+    signal: AbortSignal.timeout(30000)
+  });
+
+  if (!response.ok) {
+    throw new Error(`n8n error: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data;
+}
+
+// F-008: Classification par image via n8n
+async function classifyImageWithN8N(imageBase64: string, userId?: string) {
+  // Appel au même webhook avec l'image
+  const response = await fetch(N8N_WEBHOOK_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      description: 'Classification par image',
+      imageBase64,
+      userId: userId || 'anonymous',
+      sessionId: `sess_${Date.now()}`,
+      timestamp: new Date().toISOString()
+    }),
+    signal: AbortSignal.timeout(30000)
+  });
+
+  if (!response.ok) {
+    throw new Error(`n8n image error: ${response.status}`);
+  }
+
+  return await response.json();
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { description, imageBase64 } = body;
+    const { description, imageBase64, userId, sessionId } = body;
 
-    // F-008: Classification par image
-    if (imageBase64) {
-      const imageResult = await classifyImage(imageBase64);
-      
-      return NextResponse.json({
-        hsCode: imageResult.hsCode,
-        designation: imageResult.designation,
-        tauxDD: `${imageResult.taux}%`,
-        tauxTVA: '20%',
-        unite: imageResult.unite,
-        aiSummary: imageResult.note,
-        confidence: imageResult.confidence,
-        neCitation: getNECitation(imageResult.hsCode),
-        source: 'image'
-      });
-    }
-
-    // Classification textuelle (existant)
-    if (!description) {
+    // Validation
+    if (!description && !imageBase64) {
       return NextResponse.json(
         { error: 'Description ou image requise' },
         { status: 400 }
       );
     }
 
-    const query = description.toLowerCase();
-    const matches = hsCodesChapitre01.filter(hs => 
-      hs.designation.toLowerCase().includes(query) ||
-      hs.code.includes(query)
-    );
-
-    if (matches.length === 0) {
-      return NextResponse.json({
-        error: 'Aucun code HS trouvé',
-        suggestion: 'Essayez avec: cheval, bovin, poulet, chien, oiseau...'
-      });
+    // F-008: Classification par image
+    if (imageBase64) {
+      try {
+        if (USE_N8N) {
+          const n8nResult = await classifyImageWithN8N(imageBase64, userId);
+          
+          return NextResponse.json({
+            hsCode: n8nResult.code_hs?.replace(/\./g, '') || '0100000000',
+            designation: n8nResult.designation || 'Classification par image',
+            tauxDD: n8nResult.taux_douane || 'N/A',
+            tauxTVA: '20%',
+            unite: n8nResult.unite || 'nombre',
+            aiSummary: n8nResult.analyse || 'Analyse par IA HSBoss',
+            confidence: n8nResult.confiance || 80,
+            neCitation: n8nResult.neCitation || getNECitation(n8nResult.code_hs || ''),
+            sources: n8nResult.sources_utilisees || [],
+            sessionId: n8nResult.sessionId,
+            source: 'n8n-image'
+          });
+        }
+      } catch (n8nError) {
+        console.warn('n8n image classification failed, using fallback:', n8nError);
+        // Fallback en cas d'erreur n8n
+        return NextResponse.json({
+          hsCode: '0105131000',
+          designation: 'Poulets reproducteurs (mode dégradé)',
+          tauxDD: '2.5%',
+          tauxTVA: '20%',
+          unite: 'nombre',
+          aiSummary: 'Service de classification par image temporairement indisponible. Veuillez réessayer.',
+          confidence: 50,
+          neCitation: getNECitation('0105131000'),
+          error: 'n8n_unavailable',
+          source: 'fallback'
+        });
+      }
     }
 
-    const bestMatch = matches[0];
-    const citation = getNECitation(bestMatch.code);
-    
+    // Classification textuelle via HSBoss Agent n8n
+    if (USE_N8N) {
+      try {
+        const n8nResult = await callN8NAgent(description, userId, sessionId);
+        
+        // Si l'agent retourne une erreur
+        if (!n8nResult.success) {
+          throw new Error(n8nResult.error || 'Agent error');
+        }
+
+        // Formatage de la réponse pour le frontend
+        return NextResponse.json({
+          hsCode: n8nResult.code_hs?.replace(/\./g, '') || '',
+          designation: n8nResult.designation || description,
+          tauxDD: typeof n8nResult.taux_douane === 'number' 
+            ? `${n8nResult.taux_douane}%` 
+            : n8nResult.taux_douane || 'N/A',
+          tauxTVA: n8nResult.taux_tva || '20%',
+          unite: n8nResult.unite || 'kg',
+          aiSummary: n8nResult.analyse || `Classification HSBoss: ${n8nResult.designation}`,
+          confidence: n8nResult.confiance || 80,
+          neCitation: n8nResult.neCitation || getNECitation(n8nResult.code_hs || ''),
+          chapitre: n8nResult.chapitre,
+          codesCandidats: n8nResult.codes_candidats || [],
+          alertes: n8nResult.alertes || [],
+          recommandations: n8nResult.recommandations,
+          sourcesVerifiees: n8nResult.sources_verifiees,
+          verificationHumaine: n8nResult.verification_humaine_requise,
+          sessionId: n8nResult.sessionId,
+          ragActive: n8nResult.rag_active,
+          source: 'hsboss-agent'
+        });
+
+      } catch (n8nError) {
+        console.error('n8n agent error:', n8nError);
+        
+        // Fallback : message d'erreur user-friendly
+        return NextResponse.json({
+          error: 'Agent HSBoss temporairement indisponible',
+          message: 'Le service de classification IA est en cours de maintenance. Veuillez réessayer dans quelques instants.',
+          retryable: true,
+          source: 'error'
+        }, { status: 503 });
+      }
+    }
+
+    // Fallback si USE_N8N = false (ne devrait pas arriver)
     return NextResponse.json({
-      hsCode: bestMatch.code,
-      designation: bestMatch.designation,
-      tauxDD: `${bestMatch.taux}%`,
-      tauxTVA: '20%',
-      unite: bestMatch.unite,
-      aiSummary: `Classification trouvée: ${bestMatch.designation}`,
-      confidence: matches.length === 1 ? 95 : 85,
-      neCitation: citation,
-      matchesFound: matches.length,
-      allMatches: matches.slice(0, 5),
-      source: 'text'
-    });
+      error: 'Configuration error',
+      message: 'Le service de classification n\'est pas configuré correctement.'
+    }, { status: 500 });
+
   } catch (error) {
     console.error('Classification error:', error);
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { 
+        error: 'Erreur de classification',
+        message: error instanceof Error ? error.message : 'Erreur inconnue'
+      },
       { status: 500 }
     );
   }
